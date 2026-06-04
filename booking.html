@@ -1,0 +1,250 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <title>預約拍照表單</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css">
+</head>
+<body class="bg-light">
+
+<nav class="navbar navbar-expand-lg navbar-dark bg-dark mb-4">
+  <div class="container">
+    <a class="navbar-brand" href="index.html">預約拍照</a>
+  </div>
+</nav>
+
+<main class="container">
+  <div class="row justify-content-center">
+    <div class="col-lg-8">
+      <div class="card shadow-sm">
+        <div class="card-body">
+          <h3 class="mb-3">預約表單</h3>
+
+          <div id="alertBox" class="d-none alert"></div>
+          <div id="announcement" class="alert alert-info d-none mb-3"></div>
+
+          <form id="bookingForm">
+            <div class="mb-3">
+              <label class="form-label">姓名 *</label>
+              <input type="text" id="customerName" class="form-control" required>
+            </div>
+            <div class="mb-3">
+              <label class="form-label">手機 *</label>
+              <input type="text" id="phone" class="form-control" required>
+            </div>
+            <div class="mb-3">
+              <label class="form-label">Email</label>
+              <input type="email" id="email" class="form-control">
+            </div>
+            <div class="mb-3">
+              <label class="form-label">預約日期 *</label>
+              <input type="date" id="appointmentDate" class="form-control" required>
+            </div>
+            <div class="mb-3">
+              <label class="form-label">預約時間 *</label>
+              <select id="appointmentTime" class="form-select" required>
+                <option value="">請先選擇日期</option>
+              </select>
+              <div class="form-text">平日每個 30 分鐘時段最多 1 組；週六最多 2 組，實際可預約依剩餘組數顯示。</div>
+            </div>
+            <div class="mb-3">
+              <label class="form-label">預約人數 *</label>
+              <input type="number" id="peopleCount" class="form-control" min="1" max="10" value="1" required>
+              <div class="form-text">請填寫本組人數。週六若人數達 2 人以上，該時段不再開放第二組預約。</div>
+            </div>
+            <div class="mb-3">
+              <label class="form-label">主要方案 *</label>
+              <select id="baseService" class="form-select" required>
+                <option value="">載入中…</option>
+              </select>
+            </div>
+            <div class="mb-3">
+              <label class="form-label">加購服務（可複選）</label>
+              <div id="addOnServices">載入中…</div>
+            </div>
+            <div class="mb-3">
+              <label class="form-label">備註</label>
+              <textarea id="notes" class="form-control" rows="3"></textarea>
+            </div>
+
+            <button type="submit" id="submitBtn" class="btn btn-primary">送出預約</button>
+          </form>
+        </div>
+      </div>
+    </div>
+  </div>
+</main>
+
+<script>
+  // ↓ 替換為你的 Google Apps Script 部署網址
+  var GAS_URL = "https://script.google.com/macros/s/AKfycbxJH9-sh_CqkOS0QkrV3_WlDXy6KCWyu5rRPy32VL1TfSieQWAf_9TLaHqIAV2HhA12/exec";
+
+  var dateInput   = document.getElementById("appointmentDate");
+  var timeSelect  = document.getElementById("appointmentTime");
+  var baseSelect  = document.getElementById("baseService");
+  var addOnDiv    = document.getElementById("addOnServices");
+  var submitBtn   = document.getElementById("submitBtn");
+  var alertBox    = document.getElementById("alertBox");
+
+  // ── 初始化 ──────────────────────────────────
+  (async function init() {
+    try {
+      var [svcResp, cfgResp] = await Promise.all([
+        fetch(GAS_URL + "?action=services"),
+        fetch(GAS_URL + "?action=config")
+      ]);
+      var svcs = await svcResp.json();
+      var cfg  = await cfgResp.json();
+
+      if (cfg.announcement) {
+        var el = document.getElementById("announcement");
+        el.textContent = cfg.announcement;
+        el.classList.remove("d-none");
+      }
+
+      // 主要方案
+      baseSelect.innerHTML = '<option value="">請選擇</option>';
+      (svcs.baseServices || []).forEach(function(s) {
+        var opt = document.createElement("option");
+        opt.value = s.name;
+        opt.textContent = s.name + " $" + s.price;
+        baseSelect.appendChild(opt);
+      });
+
+      // 加購服務
+      addOnDiv.innerHTML = "";
+      if (!(svcs.addOnServices || []).length) {
+        addOnDiv.innerHTML = "<span class='text-muted'>（無加購服務）</span>";
+      } else {
+        (svcs.addOnServices || []).forEach(function(s) {
+          var div = document.createElement("div");
+          div.className = "form-check";
+          div.innerHTML = '<input class="form-check-input" type="checkbox" name="addOn" value="' + esc(s.name) + '">'
+            + '<label class="form-check-label">' + esc(s.name) + " $" + esc(s.price) + '</label>';
+          addOnDiv.appendChild(div);
+        });
+      }
+
+      // 預設日期為明天
+      var tomorrow = new Date();
+      tomorrow.setDate(tomorrow.getDate() + 1);
+      dateInput.value = toLocalDateStr(tomorrow);
+      await loadSlots();
+    } catch(e) {
+      showAlert("danger", "頁面載入失敗，請重新整理：" + e.message);
+    }
+  })();
+
+  // ── 日期變更時重新載入時段 ──────────────────
+  dateInput.addEventListener("change", loadSlots);
+
+  async function loadSlots() {
+    if (!dateInput.value) {
+      resetTimeSelect("請先選擇日期");
+      return;
+    }
+    resetTimeSelect("載入中…");
+    try {
+      var resp = await fetch(GAS_URL + "?action=availability&date=" + dateInput.value);
+      var data = await resp.json();
+      if (data.error)  { resetTimeSelect("載入失敗：" + data.error); return; }
+      if (data.closed) { resetTimeSelect(data.reason || "此日期無法預約");  return; }
+
+      var slots     = (data.slots || []).filter(function(s){ return s.remaining > 0; });
+      timeSelect.innerHTML = "";
+      if (!slots.length) {
+        resetTimeSelect("此日期已無可預約時段");
+        return;
+      }
+      slots.forEach(function(s) {
+        var opt = document.createElement("option");
+        opt.value = s.time;
+        opt.textContent = s.time + "（剩餘 " + s.remaining + " 組）";
+        timeSelect.appendChild(opt);
+      });
+    } catch(e) {
+      resetTimeSelect("載入失敗，請稍後再試");
+    }
+  }
+
+  function resetTimeSelect(msg) {
+    timeSelect.innerHTML = '<option value="">' + esc(msg) + '</option>';
+  }
+
+  // ── 送出預約 ────────────────────────────────
+  document.getElementById("bookingForm").addEventListener("submit", async function(ev) {
+    ev.preventDefault();
+    hideAlert();
+
+    var timeVal = timeSelect.value;
+    if (!timeVal) { showAlert("danger", "請選擇預約時間"); return; }
+
+    var addOns = Array.from(document.querySelectorAll('input[name="addOn"]:checked'))
+                      .map(function(el){ return el.value; });
+
+    var payload = {
+      action:          "book",
+      customerName:    document.getElementById("customerName").value.trim(),
+      phone:           document.getElementById("phone").value.trim(),
+      email:           document.getElementById("email").value.trim(),
+      appointmentDateTime: dateInput.value + "T" + timeVal,
+      peopleCount:     parseInt(document.getElementById("peopleCount").value) || 1,
+      baseService:     baseSelect.value,
+      addOnServices:   addOns,
+      notes:           document.getElementById("notes").value.trim()
+    };
+
+    submitBtn.disabled = true;
+    submitBtn.textContent = "送出中…";
+
+    try {
+      var resp = await fetch(GAS_URL, {
+        method:  "POST",
+        headers: {"Content-Type": "application/json"},
+        body:    JSON.stringify(payload)
+      });
+      var result = await resp.json();
+      if (result.error) {
+        showAlert("danger", result.error);
+      } else {
+        // 跳轉到成功頁
+        sessionStorage.setItem("bookingResult", JSON.stringify({
+          name:  payload.customerName,
+          date:  dateInput.value,
+          time:  timeVal,
+          base:  payload.baseService,
+          addOns: addOns,
+          id:    result.id
+        }));
+        window.location.href = "booking-success.html";
+      }
+    } catch(e) {
+      showAlert("danger", "送出失敗，請稍後再試：" + e.message);
+    } finally {
+      submitBtn.disabled = false;
+      submitBtn.textContent = "送出預約";
+    }
+  });
+
+  // ── 工具函式 ────────────────────────────────
+  function showAlert(type, msg) {
+    alertBox.className = "alert alert-" + type;
+    alertBox.textContent = msg;
+    alertBox.classList.remove("d-none");
+    alertBox.scrollIntoView({behavior:"smooth", block:"nearest"});
+  }
+  function hideAlert() {
+    alertBox.classList.add("d-none");
+  }
+  function toLocalDateStr(d) {
+    return d.getFullYear() + "-"
+      + String(d.getMonth() + 1).padStart(2,"0") + "-"
+      + String(d.getDate()).padStart(2,"0");
+  }
+  function esc(v) {
+    return String(v || "").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
+  }
+</script>
+</body>
+</html>

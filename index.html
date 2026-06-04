@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <title>預約拍照服務</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css">
+</head>
+<body class="bg-light">
+
+<nav class="navbar navbar-expand-lg navbar-dark bg-dark mb-4">
+  <div class="container">
+    <a class="navbar-brand" href="index.html">預約拍照</a>
+    <a class="btn btn-outline-light ms-auto" href="booking.html">立即預約</a>
+  </div>
+</nav>
+
+<main class="container">
+  <div id="announcement" class="alert alert-info d-none mb-4"></div>
+
+  <div class="row">
+    <div class="col-lg-8 mb-4">
+      <h2 class="mb-3">主要方案</h2>
+      <div id="baseServices" class="row">
+        <div class="text-muted">載入中…</div>
+      </div>
+
+      <h2 class="mt-4 mb-3">加購服務</h2>
+      <div id="addOnServices" class="row">
+        <div class="text-muted">載入中…</div>
+      </div>
+    </div>
+
+    <div class="col-lg-4">
+      <div class="card shadow-sm">
+        <div class="card-body">
+          <h4 class="card-title mb-3">線上預約</h4>
+          <p class="card-text">填寫基本資料與想預約的時段，我們會再與您聯繫確認。</p>
+          <a href="booking.html" class="btn btn-primary w-100">前往預約表單</a>
+        </div>
+      </div>
+    </div>
+  </div>
+</main>
+
+<script>
+  // ↓ 替換為你的 Google Apps Script 部署網址
+  var GAS_URL = "https://script.google.com/macros/s/AKfycbxJH9-sh_CqkOS0QkrV3_WlDXy6KCWyu5rRPy32VL1TfSieQWAf_9TLaHqIAV2HhA12/exec";
+
+  async function loadPage() {
+    try {
+      var [svcResp, cfgResp] = await Promise.all([
+        fetch(GAS_URL + "?action=services"),
+        fetch(GAS_URL + "?action=config")
+      ]);
+      var svcs = await svcResp.json();
+      var cfg  = await cfgResp.json();
+
+      if (cfg.announcement) {
+        var el = document.getElementById("announcement");
+        el.textContent = cfg.announcement;
+        el.classList.remove("d-none");
+      }
+
+      renderServices("baseServices",  svcs.baseServices || [],  true);
+      renderServices("addOnServices", svcs.addOnServices || [], false);
+    } catch(e) {
+      console.error(e);
+    }
+  }
+
+  function renderServices(containerId, list, isBase) {
+    var container = document.getElementById(containerId);
+    if (!list.length) { container.innerHTML = '<p class="text-muted">（尚無方案）</p>'; return; }
+    container.innerHTML = list.map(function(s) {
+      return '<div class="col-md-4 mb-3">'
+        + '<div class="card h-100 shadow-sm"><div class="card-body">'
+        + '<h5 class="card-title">' + esc(s.name) + '</h5>'
+        + '<p class="card-text ' + (isBase ? 'text-primary fw-bold' : '') + '">$' + esc(s.price) + '</p>'
+        + '</div></div></div>';
+    }).join("");
+  }
+
+  function esc(v) {
+    return String(v || "").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
+  }
+
+  loadPage();
+</script>
+</body>
+</html>
